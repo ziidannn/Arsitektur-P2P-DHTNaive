@@ -103,8 +103,19 @@ public class PeerMain {
                 }
             } else if (command.equals("UPLOAD")) {
                 String filename = (String) in.readObject();
-                int senderId = (int) in.readObject(); // ID pengirim
-                byte[] data = (byte[]) in.readObject();
+                int senderId = (int) in.readObject();
+                int totalBytes = (int) in.readObject();
+
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                byte[] buffer = new byte[4096];
+                int received = 0;
+                while (received < totalBytes) {
+                    int len = in.read(buffer, 0, Math.min(buffer.length, totalBytes - received));
+                    if (len == -1) break;
+                    baos.write(buffer, 0, len);
+                    received += len;
+                }
+                byte[] data = baos.toByteArray();
 
                 File file = new File("shared/" + filename);
                 file.getParentFile().mkdirs();

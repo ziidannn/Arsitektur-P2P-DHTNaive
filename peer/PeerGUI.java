@@ -1,10 +1,8 @@
-
 package peer;
 
 import common.*;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
-
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.io.*;
@@ -17,21 +15,25 @@ public class PeerGUI extends JFrame {
     private int myId;
     private List<PeerInfo> peers;
     private DefaultTableModel tableModel;
+    private RingPanel ringPanel;
 
     public PeerGUI(int myId, List<PeerInfo> peers) {
         this.myId = myId;
         this.peers = peers;
 
         setTitle("Peer " + myId);
-        setSize(600, 400);
+        setSize(800, 550);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
+
+        // 🔁 Panel visual ring
+        ringPanel = new RingPanel(peers);
+        add(ringPanel, BorderLayout.NORTH);
 
         output = new JTextArea();
         output.setEditable(false);
         add(new JScrollPane(output), BorderLayout.CENTER);
 
-        // Tambahkan tabel di sini
         String[] columns = {"File Name", "Hash", "Lokasi"};
         tableModel = new DefaultTableModel(columns, 0);
         JTable fileTable = new JTable(tableModel);
@@ -43,18 +45,21 @@ public class PeerGUI extends JFrame {
         JButton downloadBtn = new JButton("Download");
         JButton refreshBtn = new JButton("Refresh File List");
         JButton deleteBtn = new JButton("Delete");
-        
+        JButton redrawBtn = new JButton("Redraw Ring");
+
         deleteBtn.addActionListener(this::handleDelete);
-        panel.add(deleteBtn);
         refreshBtn.addActionListener(e -> refreshFileTable());
         uploadBtn.addActionListener(this::handleUpload);
         searchBtn.addActionListener(this::handleSearch);
         downloadBtn.addActionListener(this::handleDownload);
+        redrawBtn.addActionListener(e -> ringPanel.repaint());
 
         panel.add(refreshBtn);
         panel.add(uploadBtn);
         panel.add(searchBtn);
         panel.add(downloadBtn);
+        panel.add(deleteBtn);
+        panel.add(redrawBtn);
         add(panel, BorderLayout.SOUTH);
     }
 
@@ -75,30 +80,18 @@ public class PeerGUI extends JFrame {
                     PeerMain.localFiles.put(name, new FileEntry(name));
                     PeerMain.hashToFile.put(hash, name);
                     refreshFileTable();
-
-                    // ✅ Tambahkan alert warning
-                    output.append("⚠️ Node successor belum aktif, file disimpan sendiri sementara.\n");
-                    JOptionPane.showMessageDialog(this,
-                        "Node successor belum aktif.\nFile disimpan di node ini untuk sementara.",
-                        "Peringatan",
-                        JOptionPane.WARNING_MESSAGE);
-
                 } catch (IOException ex) {
                     ex.printStackTrace();
                 }
-            }
- else {
+            } else {
                 try (Socket socket = new Socket(target.ip, target.port);
-                    ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream())) {
+                     ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream())) {
 
                     out.writeObject("UPLOAD");
                     out.writeObject(name);
-                    out.writeObject(myId); // Kirim ID pengirim
-
-                    // ✅ Baca file menjadi byte array
+                    out.writeObject(myId);
                     byte[] data = java.nio.file.Files.readAllBytes(file.toPath());
-                    out.writeObject(data); // ✅ kirim data setelah deklarasi
-
+                    out.writeObject(data);
                     output.append("File sent to Node " + target.id + "\n");
 
                 } catch (Exception ex) {
@@ -115,8 +108,7 @@ public class PeerGUI extends JFrame {
         int hash = Integer.parseInt(input);
 
         output.append("Searching file with hash = " + hash + "\n");
-
-        forwardSearch(hash, myId); // Mulai pencarian dari node sendiri
+        forwardSearch(hash, myId); // mulai dari node ini
     }
 
     private void forwardSearch(int hash, int currentId) {
@@ -131,16 +123,20 @@ public class PeerGUI extends JFrame {
         if (current == null) return;
 
         try (Socket socket = new Socket(current.ip, current.port);
-            ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
-            ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+             ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+
             out.writeObject("FORWARD_SEARCH");
             out.writeObject(hash);
-            out.writeObject(myId); // origin node
-            out.writeObject(0);    // hop count awal
-            out.writeObject("Node " + myId); // route log awal
+            out.writeObject(myId);
+            out.writeObject(0);
+            out.writeObject("Node " + myId);
 
             String response = (String) in.readObject();
-            output.append(response + "\n");
+            String[] lines = response.split("\n");
+            for (String line : lines) {
+                output.append("[Search] " + line + "\n");
+            }
 
         } catch (Exception ex) {
             ex.printStackTrace();
@@ -153,9 +149,8 @@ public class PeerGUI extends JFrame {
 
         int hash = Integer.parseInt(input);
         PeerInfo target = findSuccessor(hash);
-
-        // Cari nama file dari hash (lokal atau hasil search sebelumnya)
         String filename = PeerMain.hashToFile.get(hash);
+
         if (filename == null) {
             output.append("File with hash " + hash + " not known in current node.\n");
             return;
@@ -164,8 +159,8 @@ public class PeerGUI extends JFrame {
         output.append("Requesting download of \"" + filename + "\" from Node " + target.id + "\n");
 
         try (Socket socket = new Socket(target.ip, target.port);
-            ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
-            ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+             ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
 
             out.writeObject("DOWNLOAD");
             out.writeObject(filename);
@@ -179,8 +174,6 @@ public class PeerGUI extends JFrame {
                 }
 
                 output.append("Downloaded and saved to downloads/" + filename + "\n");
-
-                // Tambahkan ke file lokal jika diinginkan
                 PeerMain.localFiles.put(filename, new FileEntry(filename));
                 int fileHash = Math.abs(filename.hashCode()) % 32;
                 PeerMain.hashToFile.put(fileHash, filename);
@@ -196,7 +189,7 @@ public class PeerGUI extends JFrame {
     }
 
     private void refreshFileTable() {
-        tableModel.setRowCount(0); // clear existing rows
+        tableModel.setRowCount(0);
         for (Map.Entry<String, FileEntry> entry : PeerMain.localFiles.entrySet()) {
             String filename = entry.getKey();
             int hash = entry.getValue().hash;
@@ -207,7 +200,7 @@ public class PeerGUI extends JFrame {
     private void handleDelete(ActionEvent e) {
         int selectedRow = -1;
         if (tableModel.getRowCount() > 0) {
-            selectedRow = ((JTable)((JScrollPane)getContentPane().getComponent(1)).getViewport().getView()).getSelectedRow();
+            selectedRow = ((JTable) ((JScrollPane) getContentPane().getComponent(2)).getViewport().getView()).getSelectedRow();
         }
 
         if (selectedRow == -1) {
@@ -224,17 +217,12 @@ public class PeerGUI extends JFrame {
                 JOptionPane.YES_NO_OPTION);
 
         if (confirm == JOptionPane.YES_OPTION) {
-            // Hapus file fisik
             File file = new File("shared/" + filename);
-            if (file.exists()) {
-                file.delete();
-            }
+            if (file.exists()) file.delete();
 
-            // Hapus dari map
             PeerMain.localFiles.remove(filename);
             PeerMain.hashToFile.remove(hash);
 
-            // Refresh tabel
             refreshFileTable();
             output.append("File \"" + filename + "\" berhasil dihapus dari node ini.\n");
         }
@@ -252,5 +240,62 @@ public class PeerGUI extends JFrame {
             output.append("File masuk: " + filename + " (hash=" + hash + ") dari " + sender + "\n");
             refreshFileTable();
         });
+    }
+
+    // 🔁 PANEL GRAFIK RING LINGKARAN
+    class RingPanel extends JPanel {
+        private List<PeerInfo> peers;
+
+        public RingPanel(List<PeerInfo> peers) {
+            this.peers = peers;
+            setPreferredSize(new Dimension(400, 300));
+            setBackground(Color.WHITE);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (peers == null || peers.size() == 0) return;
+
+            Graphics2D g2d = (Graphics2D) g;
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int cx = getWidth() / 2;
+            int cy = getHeight() / 2;
+            int radius = 100;
+
+            int n = peers.size();
+            Point[] positions = new Point[n];
+
+            for (int i = 0; i < n; i++) {
+                double angle = 2 * Math.PI * i / n;
+                int x = (int) (cx + radius * Math.cos(angle));
+                int y = (int) (cy + radius * Math.sin(angle));
+                positions[i] = new Point(x, y);
+            }
+
+            // garis antar node
+            g2d.setColor(Color.GRAY);
+            for (int i = 0; i < n; i++) {
+                Point p1 = positions[i];
+                Point p2 = positions[(i + 1) % n];
+                g2d.drawLine(p1.x, p1.y, p2.x, p2.y);
+            }
+
+            // gambar node
+            for (int i = 0; i < n; i++) {
+                Point p = positions[i];
+                PeerInfo peer = peers.get(i);
+                if (peer.id == myId) {
+                    g2d.setColor(Color.ORANGE);
+                } else {
+                    g2d.setColor(Color.CYAN);
+                }
+                g2d.fillOval(p.x - 15, p.y - 15, 30, 30);
+                g2d.setColor(Color.BLACK);
+                g2d.drawOval(p.x - 15, p.y - 15, 30, 30);
+                g2d.drawString(String.valueOf(peer.id), p.x - 8, p.y + 5);
+            }
+        }
     }
 }
