@@ -82,6 +82,15 @@ public class PeerMain {
         return sorted.get(0); // fallback
     }
 
+    public static boolean isNodeActive(PeerInfo peer) {
+    try (Socket socket = new Socket()) {
+        socket.connect(new java.net.InetSocketAddress(peer.ip, peer.port), 500); // timeout 0.5 detik
+        return true;
+    } catch (Exception e) {
+        return false;
+    }
+}
+
     private static void handleClient(Socket socket) {
         try (ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
              ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream())) {
@@ -102,35 +111,32 @@ public class PeerMain {
                     out.writeObject("NOT_FOUND");
                 }
             } else if (command.equals("UPLOAD")) {
-                String filename = (String) in.readObject();
-                int senderId = (int) in.readObject();
-                int totalBytes = (int) in.readObject();
+                try {
+                    String filename = (String) in.readObject();
+                    int senderId = (int) in.readObject();
+                    byte[] data = (byte[]) in.readObject();
 
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                byte[] buffer = new byte[4096];
-                int received = 0;
-                while (received < totalBytes) {
-                    int len = in.read(buffer, 0, Math.min(buffer.length, totalBytes - received));
-                    if (len == -1) break;
-                    baos.write(buffer, 0, len);
-                    received += len;
-                }
-                byte[] data = baos.toByteArray();
+                    File file = new File("shared/" + filename);
+                    file.getParentFile().mkdirs();
 
-                File file = new File("shared/" + filename);
-                file.getParentFile().mkdirs();
-                try (FileOutputStream fos = new FileOutputStream(file)) {
-                    fos.write(data);
-
-                    // Update state
-                    localFiles.put(filename, new FileEntry(filename));
-                    int hash = Math.abs(filename.hashCode()) % 32;
-                    hashToFile.put(hash, filename);
-
-                    // Update GUI
-                    if (guiRef != null) {
-                        guiRef.onFileReceived(filename, hash, "Node " + senderId);
+                    try (FileOutputStream fos = new FileOutputStream(file)) {
+                        fos.write(data);
                     }
+
+                    // Simpan ke map
+                    FileEntry entry = new FileEntry(filename);
+                    PeerMain.localFiles.put(filename, entry);
+                    PeerMain.hashToFile.put(entry.hash, filename);
+
+                    // Tampilkan di GUI (jika ada)
+                    if (PeerMain.guiRef != null) {
+                        PeerMain.guiRef.onFileReceived(filename, entry.hash, "Node " + senderId);
+                    }
+
+                    System.out.println("✅ File " + filename + " diterima dari Node " + senderId);
+
+                } catch (Exception ex) {
+                    ex.printStackTrace();
                 }
             } else if (command.equals("FORWARD_SEARCH")) {
                 int hash = (int) in.readObject();

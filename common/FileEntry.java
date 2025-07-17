@@ -7,6 +7,6 @@ public class FileEntry {
 
     public FileEntry(String filename) {
         this.filename = filename;
-        this.hash = Math.abs(filename.hashCode()) % 32;
+        this.hash = Math.abs(filename.hashCode()) % 31;
     }
 }
